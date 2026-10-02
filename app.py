@@ -1,184 +1,168 @@
+import os
+import sys
+
+# 1. Root directory ko Python path me add karein (sys/os import hone ke foran baad)
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+
 import json
 import uuid
 import streamlit as st
 
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
-import os
-import sys
+# 2. Local Agents Import (Path fix hone ke baad)
+try:
+    from src.agents.planner import ResearchPlanner
+    from src.agents.evidence_analyst import EvidenceAnalyst
+    from src.agents.quality_control import QualityControlAgent
+    from src.agents.report_generator import ReportGenerator
+except Exception as e:
+    st.error(f"Failed to import agents from src folder: {e}")
 
-# Current directory (root folder) ko Python path me add karein
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# 3. Page Configuration
+st.set_page_config(
+    page_title="MarketMind AI — Autonomous Research Agent",
+    page_icon="🧠",
+    layout="wide"
+)
 
-from src.agents.evidence_analyst import EvidenceAnalyst
-from src.agents.planner import ResearchPlanner
-from src.agents.quality_control import QualityControlAgent
-from src.agents.report_generator import ReportGenerator
-from src.agents.request_analyser import RequestAnalyser
-from src.agents.researcher import ResearchAgentLoop
-from src.agents.synthesis import SynthesisAgent
-from src.approval.cli_gate import HumanApprovalGate
-from src.llm.client import LLMClient
-from src.llm.usage import UsageTracker
-from src.state.research_state import ResearchState, ScopeObject
+# 4. Session State Setup
+if "openai_api_key" not in st.session_state:
+    st.session_state["openai_api_key"] = ""
+if "research_results" not in st.session_state:
+    st.session_state["research_results"] = None
 
-st.set_page_config(page_title="MarketMind AI - Research Workbench", layout="wide")
-
-st.title("MarketMind AI: Autonomous Business Research Agent")
-st.caption("AAI-412 Capstone Practical Implementation | OpenAI API + Custom Tool Loop")
-
-# Sidebar Configuration
-st.sidebar.header("Execution Controls")
-run_cost_limit = st.sidebar.number_input("Cost Ceiling ($)", min_value=0.5, max_value=10.0, value=2.5, step=0.5)
-max_iterations = st.sidebar.slider("Max Loop Iterations", 3, 20, 10)
-
-if "state" not in st.session_state:
-    st.session_state.state = None
-if "report" not in st.session_state:
-    st.session_state.report = None
-
-# Tabs for workflow stages
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "1. Request & Scope", "2. Research Plan", "3. Agent Execution & Logs", "4. Quality Control", "5. Final Report & Gate"
-])
-
-with tab1:
-    st.subheader("Initiate Business Intelligence Brief")
-    raw_request = st.text_area(
-        "Client Request Prompt",
-        value="Research the market for AI-powered customer support software, key competitors, pricing models, and entry risks.",
-        height=100
-    )
-
-    if st.button("Analyse Request & Generate Scope", type="primary"):
-        usage = UsageTracker()
-        client = LLMClient(usage_tracker=usage)
-        analyser = RequestAnalyser(client)
+# 5. API Key Input Screen (Center Screen Gate)
+if not st.session_state["openai_api_key"]:
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.write("")
+        st.write("")
+        st.title("🧠 MarketMind AI")
+        st.subheader("Autonomous Business Research Agent")
+        st.write("Please enter your OpenAI API key to access the research platform.")
         
-        with st.spinner("Analyzing request scope & ambiguities..."):
-            scope = analyser.analyze(raw_request)
-            run_id = f"RUN-{uuid.uuid4().hex[:6]}"
-            st.session_state.state = ResearchState(run_id=run_id, scope=scope)
-            st.success("Scope Analysis Completed!")
-
-    if st.session_state.state:
-        st.json(st.session_state.state.scope.model_dump())
-
-with tab2:
-    st.subheader("Research Plan & Sub-Question Breakdown")
-    if st.session_state.state and not st.session_state.state.plan:
-        if st.button("Generate Research Plan"):
-            usage = UsageTracker()
-            client = LLMClient(usage_tracker=usage)
-            planner = ResearchPlanner(client)
-            
-            with st.spinner("Decomposing scope into research plan..."):
-                plan = planner.create_plan(st.session_state.state.scope)
-                st.session_state.state.plan = plan
-                for obj in plan.objectives:
-                    for sq in obj.sub_questions:
-                        st.session_state.state.question_status[sq.id] = "open"
+        api_input = st.text_input("OpenAI API Key", type="password", placeholder="sk-...")
+        if st.button("Enter Platform", use_container_width=True):
+            if api_input.strip().startswith("sk-"):
+                st.session_state["openai_api_key"] = api_input.strip()
                 st.rerun()
+            else:
+                st.error("Please enter a valid OpenAI API Key starting with 'sk-'")
+    st.stop()
 
-    if st.session_state.state and st.session_state.state.plan:
-        st.write(f"**Geography:** {st.session_state.state.plan.geography} | **Horizon:** {st.session_state.state.plan.time_horizon}")
-        for obj in st.session_state.state.plan.objectives:
-            with st.expander(f"Objective {obj.id}: {obj.title}", expanded=True):
-                st.write(obj.description)
-                for sq in obj.sub_questions:
-                    status = st.session_state.state.question_status.get(sq.id, "open")
-                    st.write(f"- `{sq.id}`: {sq.question} (Status: **{status}**)")
+# ------------------------------------------------------------------
+# 6. MAIN APPLICATION INTERFACE
+# ------------------------------------------------------------------
+api_key = st.session_state["openai_api_key"]
 
-with tab3:
-    st.subheader("Autonomous Research Loop")
-    if st.session_state.state and st.session_state.state.plan:
-        if st.button("Run Research Agent Loop", type="primary"):
-            usage = UsageTracker()
-            client = LLMClient(usage_tracker=usage)
-            analyst = EvidenceAnalyst(client)
-            loop = ResearchAgentLoop(client, analyst)
-            
-            with st.spinner("Agent calling tools, gathering evidence, and analyzing claims..."):
-                loop.run_loop(st.session_state.state)
-                st.success("Research Loop Execution Finished!")
-
-        st.metric("Total Cumulative Cost ($)", f"${st.session_state.state.cumulative_cost_usd:.4f}")
-        st.metric("Total Tool Calls", st.session_state.state.tool_call_count)
+# Sidebar Controls
+with st.sidebar:
+    st.header("⚙️ Agent Controls")
+    st.success("API Key Active ✅")
+    
+    if st.button("Change API Key"):
+        st.session_state["openai_api_key"] = ""
+        st.session_state["research_results"] = None
+        st.rerun()
         
-        st.markdown("### Tool Call History")
-        for log in st.session_state.state.tool_history:
-            st.text(f"[{log.call_id}] Tool: {log.tool_name} | Error: {log.error}")
-            st.json({"args": log.arguments, "result": log.result})
+    st.divider()
+    max_iterations = st.slider("Max Research Iterations", min_value=1, max_value=10, value=5)
+    run_cost_limit = st.number_input("Cost Limit ($)", min_value=1.0, max_value=50.0, value=10.0)
+    
+    st.caption("Verity Strategy Partners — Market Intelligence Practice")
 
-with tab4:
-    st.subheader("Quality Control & Defect Inspector")
-    if st.session_state.state and st.session_state.state.evidence_store:
-        if st.button("Run Quality Control Check"):
-            usage = UsageTracker()
-            client = LLMClient(usage_tracker=usage)
-            qc_agent = QualityControlAgent(client)
-            
-            with st.spinner("Checking claims, source references, and contradictions..."):
-                verdict = qc_agent.run_qc(st.session_state.state)
-                st.session_state.qc_verdict = verdict
-                st.rerun()
+# Header Section
+st.title("🧠 MarketMind AI — Business Intelligence Brief Generator")
+st.caption("Decomposed, Provenance-Backed Market Research System")
 
-        if "qc_verdict" in st.session_state:
-            v = st.session_state.qc_verdict
-            st.write(f"**QC Status Pass:** {v.passed}")
-            for defect in v.defects:
-                st.warning(f"[{defect.severity.upper()}] {defect.defect_type} at {defect.location}: {defect.description}")
+# Research Topic Input
+topic_input = st.text_area(
+    "Enter Research Topic / Client Brief Request:",
+    placeholder="e.g., Who competes in the AI Customer Support market, how are they differentiated, and where is the market heading?",
+    height=100
+)
 
-with tab5:
-    st.subheader("Final Synthesis & Human Approval Gate")
-    if st.session_state.state and st.session_state.state.evidence_store:
-        if st.button("Synthesise & Assemble Report"):
-            usage = UsageTracker()
-            client = LLMClient(usage_tracker=usage)
-            synth_agent = SynthesisAgent(client)
-            report_gen = ReportGenerator()
-            
-            with st.spinner("Synthesising evidence into structured report..."):
-                findings = synth_agent.synthesize(st.session_state.state)
-                report = report_gen.assemble(st.session_state.state, findings)
-                st.session_state.report = report
-                st.success("Report Assembly Complete!")
+col_run, col_clear = st.columns([1, 4])
+with col_run:
+    run_button = st.button("🚀 Start Autonomous Research", type="primary", use_container_width=True)
 
-    if st.session_state.report:
-        rep = st.session_state.report
-        st.markdown(f"## {rep.research_objective}")
-        st.markdown(f"**Executive Summary:** {rep.executive_summary}")
+if run_button:
+    if not topic_input.strip():
+        st.warning("Please enter a research topic first.")
+    else:
+        st.session_state["research_results"] = None
         
-        st.markdown("### Key Trends")
-        for trend in rep.key_trends:
-            st.write(f"- **[{trend.claim_type.value.upper()}]** {trend.statement} (Evidence: {trend.evidence_ids})")
+        with st.status("Executing MarketMind Agentic Pipeline...", expanded=True) as status:
+            try:
+                # Step 1: Question Decomposition (Planner)
+                st.write("📋 **Step 1/4:** Decomposing scope into research questions...")
+                planner = ResearchPlanner(api_key=api_key)
+                plan = planner.plan(topic_input)
+                st.write(f"✓ Created research plan with {len(plan.get('questions', []))} questions.")
 
-        st.markdown("### Competitor Matrix")
-        matrix_data = []
-        for cell in rep.competitor_analysis.cells:
-            matrix_data.append({"Entity": cell.entity, "Attribute": cell.attribute, "Value": cell.value})
-        st.table(matrix_data)
+                # Step 2: Evidence Collection & Extraction
+                st.write("🔎 **Step 2/4:** Collecting sources & extracting typed evidence...")
+                analyst = EvidenceAnalyst(api_key=api_key)
+                analysis = analyst.analyze(topic_input, research_plan=plan)
+                st.write("✓ Evidence extracted and epistemically categorized.")
 
-        st.markdown("---")
-        st.subheader("Human Approval Gate (Mandatory Control)")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            approver_id = st.text_input("Approver ID / Name", value="Senior_Partner_01")
-            approval_notes = st.text_area("Reviewer Notes", value="Verified claims against corpus citations.")
-        
-        with col2:
-            decision = st.radio(
-                "Select Approval Action:",
-                options=["approve", "reject", "request_research", "modify_scope"]
-            )
-            
-            if st.button("Submit Decision", type="primary"):
-                updated_report = HumanApprovalGate.process_decision(
-                    report=st.session_state.report,
-                    decision=decision,
-                    approver_id=approver_id,
-                    notes=approval_notes
+                # Step 3: Quality Control Pass
+                st.write("🛡️ **Step 3/4:** Performing QC check for unsupported claims & coverage...")
+                qc_agent = QualityControlAgent(api_key=api_key)
+                qc_results = qc_agent.review(report_draft=str(analysis), research_plan=plan)
+                st.write("✓ Quality Control evaluation complete.")
+
+                # Step 4: Final Synthesis & Brief Generation
+                st.write("📝 **Step 4/4:** Synthesizing Markdown Market Intelligence Brief...")
+                generator = ReportGenerator(api_key=api_key)
+                final_brief = generator.generate(
+                    topic=topic_input,
+                    analysis_data=analysis,
+                    qc_feedback=qc_results
                 )
-                st.session_state.report = updated_report
-                st.success(f"Action '{decision.upper()}' recorded by {approver_id}!")
-                st.json(updated_report.approval.model_dump())
+
+                st.session_state["research_results"] = {
+                    "topic": topic_input,
+                    "plan": plan,
+                    "analysis": analysis,
+                    "qc": qc_results,
+                    "brief": final_brief
+                }
+                status.update(label="Research Complete!", state="complete", expanded=False)
+
+            except Exception as err:
+                status.update(label="Error occurred during execution", state="error")
+                st.error(f"Execution Error: {str(err)}")
+
+# ------------------------------------------------------------------
+# 7. DISPLAY RESULTS
+# ------------------------------------------------------------------
+if st.session_state["research_results"]:
+    res = st.session_state["research_results"]
+    
+    st.divider()
+    st.subheader("📄 Generated Market Intelligence Brief")
+    
+    # Download Button
+    st.download_button(
+        label="📥 Download Brief (.md)",
+        data=res["brief"],
+        file_name=f"MarketMind_Brief_{uuid.uuid4().hex[:6]}.md",
+        mime="text/markdown"
+    )
+    
+    # Render Report
+    st.markdown(res["brief"])
+    
+    st.divider()
+    # Inspection Tabs for Auditability / Human Approval Gate
+    with st.expander("🔍 Inspect Agent Execution Pipeline (Audit Trail)"):
+        tab1, tab2, tab3 = st.tabs(["Research Plan", "Evidence Analysis", "Quality Control"])
+        
+        with tab1:
+            st.json(res["plan"])
+            
+        with tab2:
+            st.write(res["analysis"])
+            
+        with tab3:
+            st.write(res["qc"])
