@@ -1,8 +1,13 @@
 import json
 import uuid
 import streamlit as st
-import sys, os
+
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+import os
+import sys
+
+# Current directory (root folder) ko Python path me add karein
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from src.agents.evidence_analyst import EvidenceAnalyst
 from src.agents.planner import ResearchPlanner
